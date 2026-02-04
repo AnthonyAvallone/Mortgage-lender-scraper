@@ -15,11 +15,12 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' })); 
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+const { v4: uuidv4 } = require('uuid');
+const jobs = {};
+
 // API keys
-// const SERPAPI_KEY = process.env.SERPAPI_KEY; 
-const SERPAPI_KEY ='2bd6055e24b0ab4236ba466cdad4a5db0a9cd545b5ac954cd4e7b982aefc5e6c';
-// const RPV_API_TOKEN = process.env.RPV_API_TOKEN; 
-const RPV_API_TOKEN = '2169AE51-9510-4D7F-ABA0-69A5F558B88B';
+const SERPAPI_KEY = process.env.SERPAPI_KEY; 
+const RPV_API_TOKEN = process.env.RPV_API_TOKEN; 
 const N8N_WEBHOOK_URL = 'https://n8n.profitwithanthonyavallone.com/webhook/upload-mortgage-lenders'
 
 // Regex patterns
@@ -146,6 +147,17 @@ async function checkDNCStatus(phone) {
     return { isDNC: false, error: error.message };
   }
 }
+
+app.get('/api/job-status/:jobId', (req, res) => {
+  const job = jobs[req.params.jobId];
+
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+
+  res.json(job);
+});
+
 
 async function searchSerpApiEnhanced(query, apiKey) {
   try {
@@ -482,9 +494,36 @@ app.post('/api/scrape-realtor', async (req, res) => {
     if (!realtor) {
       return res.status(400).json({ error: 'Mortgage Lender data is required' });
     }
+
+    const jobId = uuidv4();
+
+  // Initialize job
+  jobs[jobId] = {
+    status: 'queued',
+    progress: 0,
+    result: null,
+    error: null
+  };
+
+  // Immediately respond
+  res.json({ jobId });
+
+  // Run scraper in background
+  (async () => {
+    try {
+      jobs[jobId].status = 'running';
+
+      const result = await processRealtor(realtor, SERPAPI_KEY);
+
+      jobs[jobId].status = 'completed';
+      jobs[jobId].result = result;
+    } catch (err) {
+      jobs[jobId].status = 'failed';
+      jobs[jobId].error = err.message;
+    }
+  })();
     
-    const result = await processRealtor(realtor, apiKey);
-    res.json(result);
+
   } catch (error) {
     console.error('Scrape endpoint error:', error); 
     res.status(500).json({ error: error.message });

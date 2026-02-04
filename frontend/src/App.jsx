@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import './App.css'
 import { Upload, Download, Search, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 
+
 function App() {
   const [file, setFile] = useState(null);
   const [allData, setAllData] = useState([]);
@@ -15,8 +16,8 @@ function App() {
   const [county, setCounty] = useState('');
   const [city, setCity] = useState('');
 
-  const API_BASE_URL = 'http://localhost:3001/api';
-  // const API_BASE_URL = 'http://167.71.81.58/api/realtors/';
+  // const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = 'http://167.71.81.58/api/mortgage-lender';
 
   const addLog = (message, type = 'info') => {
     setLogs(prev => [...prev, { message, type, time: new Date().toLocaleTimeString() }]);
@@ -58,6 +59,26 @@ function App() {
     }
   };
 
+  const waitForJob = async (jobId) => {
+  while (true) {
+    await new Promise(r => setTimeout(r, 2000));
+
+    const res = await fetch(`${API_BASE_URL}/job-status/${jobId}`);
+    if (!res.ok) throw new Error('Failed to fetch job status');
+
+    const job = await res.json();
+
+    if (job.status === 'completed') {
+      return job.result;
+    }
+
+    if (job.status === 'failed') {
+      throw new Error(job.error || 'Scraping failed');
+    }
+  }
+};
+
+
   const startScraping = async () => {
     if (needsScrapingData.length === 0) {
       addLog('No mortgage lenders need scraping. All have contact info!', 'success');
@@ -72,59 +93,52 @@ function App() {
     const updatedAllData = [...allData];
 
     for (let i = 0; i < needsScrapingData.length; i++) {
-      const realtor = needsScrapingData[i];
-      addLog(`Searching: ${realtor.firstName} ${realtor.lastName}`, 'info');
+  const realtor = needsScrapingData[i];
+  addLog(`Searching: ${realtor.firstName} ${realtor.lastName}`, 'info');
 
-      try {
-        const response = await fetch(`${API_BASE_URL}/scrape-realtor`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            realtor: {
-              firstName: realtor.firstName,
-              lastName: realtor.lastName,
-              company: realtor.company,
-              work_email: realtor.work_email,
-              mobile_phone: realtor.mobile_phone,
-              personal_email: realtor.personal_email,
-              title: realtor.title,
-              city: realtor.city,
-              state: realtor.state,
-              trailing_14_units: realtor.trailing_14_units,
-              tags: realtor.tags
-            }
-          })
-        });
+  try {
+    const startRes = await fetch(`${API_BASE_URL}/scrape-realtor`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ realtor })
+    });
 
-        if (!response.ok) {
-          throw new Error('Scraping failed');
-        }
-
-        const result = await response.json();
-
-        const allIndex = updatedAllData.findIndex(r => 
-          r.firstName === realtor.firstName && 
-          r.lastName === realtor.lastName && 
-          r.company === realtor.company
-        );
-        
-        if (allIndex !== -1) {
-          updatedAllData[allIndex] = result;
-        }
-
-        if (result.work_email || result.mobile_phone) {
-          addLog(`Found: ${result.work_email || result.mobile_phone} (${result.confidence}% confidence)`, 'success');
-        } else {
-          addLog(`No contact info found for ${realtor.firstName} ${realtor.lastName}`, 'warning');
-        }
-      } catch (error) {
-        addLog(`Error processing ${realtor.firstName} ${realtor.lastName}: ${error.message}`, 'error');
-      }
-      
-      setProgress(((i + 1) / needsScrapingData.length) * 100);
+    if (!startRes.ok) {
+      throw new Error('Failed to start scraping job');
     }
+
+    const { jobId } = await startRes.json();
+    const result = await waitForJob(jobId);
+
+    const allIndex = updatedAllData.findIndex(r =>
+      r.firstName === realtor.firstName &&
+      r.lastName === realtor.lastName &&
+      r.company === realtor.company
+    );
+
+    if (allIndex !== -1) {
+      updatedAllData[allIndex] = result;
+    }
+
+    if (result.work_email || result.mobile_phone) {
+      addLog(
+        `Found: ${result.work_email || result.mobile_phone} (${result.confidence}% confidence)`,
+        'success'
+      );
+    } else {
+      addLog(`No contact info found for ${realtor.firstName} ${realtor.lastName}`, 'warning');
+    }
+
+  } catch (error) {
+    addLog(
+      `Error processing ${realtor.firstName} ${realtor.lastName}: ${error.message}`,
+      'error'
+    );
+  }
+
+  setProgress(((i + 1) / needsScrapingData.length) * 100);
+}
+
 
     setAllData(updatedAllData);
     
