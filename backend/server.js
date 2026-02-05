@@ -23,6 +23,7 @@ const SERPAPI_KEY = process.env.SERPAPI_KEY;
 const RPV_API_TOKEN = process.env.RPV_API_TOKEN; 
 const N8N_WEBHOOK_URL = 'https://n8n.profitwithanthonyavallone.com/webhook/upload-mortgage-lenders'
 
+
 // Regex patterns
 const EMAIL_PATTERN = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
 const PHONE_PATTERN = /(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
@@ -164,17 +165,27 @@ async function searchSerpApiEnhanced(query, apiKey) {
     const response = await axios.get('https://serpapi.com/search.json', {
       params: {
         q: query,
-        num: 20, 
+        num: 20,
         api_key: apiKey,
         hl: 'en',
         gl: 'us'
       },
-      timeout: 15000
+      timeout: 15000,
+      maxRedirects: 0, // IMPORTANT
+      validateStatus: status => status === 200
     });
-    
-    const results = [];
+
+    if (
+      typeof response.data === 'string' &&
+      response.data.toLowerCase().includes('<html')
+    ) {
+      console.error('SerpAPI blocked: HTML response detected');
+      return [];
+    }
+
     const data = response.data;
-    
+    const results = [];
+
     if (data.organic_results) {
       for (const result of data.organic_results) {
         results.push({
@@ -185,62 +196,21 @@ async function searchSerpApiEnhanced(query, apiKey) {
         });
       }
     }
-    
+
     if (data.knowledge_graph) {
       const kg = data.knowledge_graph;
-      let kgText = [
-        kg.title,
-        kg.description,
-        kg.phone,
-        kg.email,
-        JSON.stringify(kg.profiles),
-        JSON.stringify(kg.contact)
-      ].filter(Boolean).join(' ');
-      
       results.push({
         url: kg.website || '',
         title: kg.title || '',
-        snippet: kgText,
+        snippet: [
+          kg.description,
+          kg.phone,
+          kg.email
+        ].filter(Boolean).join(' '),
         type: 'knowledge_graph'
       });
     }
-    
-    if (data.local_results && data.local_results.places) {
-      for (const place of data.local_results.places) {
-        const placeText = [
-          place.title,
-          place.address,
-          place.phone,
-          place.website
-        ].filter(Boolean).join(' ');
-        
-        results.push({
-          url: place.website || '',
-          title: place.title || '',
-          snippet: placeText,
-          type: 'local_business'
-        });
-      }
-    }
-    
-    if (data.answer_box) {
-      const ab = data.answer_box;
-      const abText = [
-        ab.answer,
-        ab.title,
-        ab.snippet
-      ].filter(Boolean).join(' ');
-      
-      if (abText) {
-        results.push({
-          url: ab.link || '',
-          title: ab.title || '',
-          snippet: abText,
-          type: 'answer_box'
-        });
-      }
-    }
-    
+
     return results;
   } catch (error) {
     console.error('SerpAPI error:', error.message);
@@ -249,36 +219,40 @@ async function searchSerpApiEnhanced(query, apiKey) {
 }
 
 async function tryScrapeSafe(url) {
-  if (url.includes('linkedin.com') || 
-      url.includes('zillow.com') || 
-      url.includes('facebook.com')) {
+  if (
+    url.includes('linkedin.com') ||
+    url.includes('zillow.com') ||
+    url.includes('facebook.com')
+  ) {
     return null;
   }
-  
+
   try {
     const response = await axios.get(url, {
       timeout: 8000,
-      maxRedirects: 3,
+      maxRedirects: 2,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+        'User-Agent': 'Mozilla/5.0 Chrome/120',
+        'Accept': 'text/html'
       }
     });
-    
+
+    if (
+      typeof response.data === 'string' &&
+      response.data.toLowerCase().includes('cisco secure access')
+    ) {
+      console.error('Blocked scrape (Cisco):', url);
+      return null;
+    }
+
     const $ = cheerio.load(response.data);
     $('script, style, noscript').remove();
-    const text = $.text();
-    
-    return extractContactInfo(text);
-  } catch (error) {
+    return extractContactInfo($.text());
+  } catch {
     return null;
   }
 }
+
 
 async function processRealtor(realtorData, apiKey) {
   const { firstName, lastName, company } = realtorData;
@@ -517,12 +491,18 @@ app.post('/api/scrape-realtor', async (req, res) => {
 
       jobs[jobId].status = 'completed';
       jobs[jobId].result = result;
+
     } catch (err) {
-      jobs[jobId].status = 'failed';
-      jobs[jobId].error = err.message;
+      console.error('Scraping failed safely:', err.message);
+
+      jobs[jobId].status = 'completed';
+      jobs[jobId].result = {
+        ...realtor,
+        confidence: 0,
+        source: 'scrape_failed'
+      };
     }
   })();
-    
 
   } catch (error) {
     console.error('Scrape endpoint error:', error); 

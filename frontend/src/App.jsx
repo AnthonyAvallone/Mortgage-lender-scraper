@@ -16,8 +16,8 @@ function App() {
   const [county, setCounty] = useState('');
   const [city, setCity] = useState('');
 
-  // const API_BASE_URL = 'http://localhost:3001/api';
-const API_BASE_URL = 'http://167.71.81.58/api/mortgage-lender';
+  const API_BASE_URL = 'http://localhost:3001/api';
+// const API_BASE_URL = 'http://167.71.81.58/api/mortgage-lender';
 
   const addLog = (message, type = 'info') => {
     setLogs(prev => [...prev, { message, type, time: new Date().toLocaleTimeString() }]);
